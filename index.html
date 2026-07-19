@@ -31,14 +31,13 @@
 
         <button id="toggleBtn" class="btn-start">Start Tracking</button>
         
-        <div id="status">Status: Idle (Screen Wake Lock off)</div>
+        <div id="status">Status: Idle</div>
         
         <h3>Current Session Logs:</h3>
         <div id="log">No coordinates recorded yet.</div>
     </div>
 
     <script>
-        // Register Service Worker for PWA installation
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('sw.js').then(() => console.log("SW Registered"));
         }
@@ -46,8 +45,9 @@
         let trackingInterval = null;
         let wakeLock = null;
         let isTracking = false;
+        let audioCtx = null;
+        let audioSource = null;
         
-        // Data session tracking
         let sessionData = []; 
         let startTimeString = "";
         let sessionDateString = "";
@@ -57,7 +57,6 @@
         const logDiv = document.getElementById('log');
         const intervalSelect = document.getElementById('intervalSelect');
 
-        // Format times for file names (e.g., 1430 for 14:30)
         function getCleanTime() {
             const now = new Date();
             return now.toTimeString().split(' ')[0].replace(/:/g, '').substring(0, 4);
@@ -65,17 +64,16 @@
 
         function getCleanDate() {
             const now = new Date();
-            return now.toISOString().split('T')[0]; // YYYY-MM-DD
+            return now.toISOString().split('T')[0];
         }
 
         async function requestWakeLock() {
             try {
                 if ('wakeLock' in navigator) {
                     wakeLock = await navigator.wakeLock.request('screen');
-                    console.log("Wake Lock active. Screen will stay on.");
                 }
             } catch (err) {
-                console.error(`${err.name}, ${err.message}`);
+                console.error(err);
             }
         }
 
@@ -83,29 +81,40 @@
             if (wakeLock !== null) {
                 wakeLock.release();
                 wakeLock = null;
-                console.log("Wake Lock released.");
             }
         }
 
-        function recordLocation() {
-            if (!navigator.geolocation) {
-                updateLog("Geolocation not supported by browser.");
-                return;
+        function playBackgroundSilence() {
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate * 2, audioCtx.sampleRate);
+                audioSource = audioCtx.createBufferSource();
+                audioSource.buffer = buffer;
+                audioSource.loop = true;
+                audioSource.connect(audioCtx.destination);
+                audioSource.start();
+            } catch (e) {
+                console.error("Audio failed:", e);
             }
+        }
+
+        function stopBackgroundSilence() {
+            if (audioSource) { audioSource.stop(); audioSource.disconnect(); audioSource = null; }
+            if (audioCtx) { audioCtx.close(); audioCtx = null; }
+        }
+
+        function recordLocation() {
+            if (!navigator.geolocation) return;
 
             navigator.geolocation.getCurrentPosition(
                 (position) => {
                     const lat = position.coords.latitude.toFixed(6);
                     const lon = position.coords.longitude.toFixed(6);
                     const timeStamp = new Date().toLocaleTimeString();
-                    
                     const logLine = `[${timeStamp}] Lat: ${lat}, Lon: ${lon}`;
                     
-                    // Add to UI log
                     if(sessionData.length === 0) logDiv.innerHTML = "";
                     logDiv.innerHTML = `<div>${logLine}</div>` + logDiv.innerHTML;
-                    
-                    // Add to internal array for file export
                     sessionData.push(logLine);
                 },
                 (error) => {
@@ -124,11 +133,11 @@
             
             toggleBtn.innerText = "Stop & Save File";
             toggleBtn.className = "btn-stop";
-            statusDiv.innerText = "Status: Tracking Active (Screen Awake)";
+            statusDiv.innerText = "Status: Background Tracking Active";
             
             requestWakeLock();
+            playBackgroundSilence();
             
-            // Run instantly, then on interval
             recordLocation();
             const minutes = parseInt(intervalSelect.value, 10);
             trackingInterval = setInterval(recordLocation, minutes * 60 * 1000);
@@ -138,6 +147,7 @@
             isTracking = false;
             clearInterval(trackingInterval);
             releaseWakeLock();
+            stopBackgroundSilence();
             
             toggleBtn.innerText = "Start Tracking";
             toggleBtn.className = "btn-start";
@@ -146,38 +156,27 @@
             if (sessionData.length > 0) {
                 exportTextFile();
             } else {
-                alert("No coordinates gathered to export.");
+                alert("No coordinates gathered.");
             }
         }
 
         function exportTextFile() {
             const endTimeString = getCleanTime();
-            // Build file string content
             const fileContent = sessionData.join('\n');
-            
-            // Generate filename template: date-start-time-end-time.txt
             const fileName = `${sessionDateString}-${startTimeString}-${endTimeString}.txt`;
-            
-            // Download payload logic
             const blob = new Blob([fileContent], { type: 'text/plain' });
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
             link.download = fileName;
-            
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
         }
 
         toggleBtn.addEventListener('click', () => {
-            if (!isTracking) {
-                startTracking();
-            } else {
-                stopTracking();
-            }
+            if (!isTracking) startTracking(); else stopTracking();
         });
 
-        // Re-request wake lock if user tabs away and returns
         document.addEventListener('visibilitychange', async () => {
             if (wakeLock !== null && document.visibilityState === 'visible' && isTracking) {
                 await requestWakeLock();
