@@ -31,7 +31,7 @@
 
         <button id="toggleBtn" class="btn-start">Start Tracking</button>
         
-        <div id="status">Status: Idle GP1 </div>
+        <div id="status">Status: Idle</div>
         
         <h3>Current Session Logs:</h3>
         <div id="log">No coordinates recorded yet.</div>
@@ -43,6 +43,8 @@
         }
 
         let trackingInterval = null;
+        let locationWatchId = null;
+        let lastKnownCoords = null;
         let wakeLock = null;
         let isTracking = false;
         let audioCtx = null;
@@ -103,26 +105,39 @@
             if (audioCtx) { audioCtx.close(); audioCtx = null; }
         }
 
-        function recordLocation() {
+        function initLocationWatch() {
             if (!navigator.geolocation) return;
-
-            navigator.geolocation.getCurrentPosition(
+            
+            locationWatchId = navigator.geolocation.watchPosition(
                 (position) => {
-                    const lat = position.coords.latitude.toFixed(6);
-                    const lon = position.coords.longitude.toFixed(6);
-                    const timeStamp = new Date().toLocaleTimeString();
-                    const logLine = `[${timeStamp}] Lat: ${lat}, Lon: ${lon}`;
-                    
-                    if(sessionData.length === 0) logDiv.innerHTML = "";
-                    logDiv.innerHTML = `<div>${logLine}</div>` + logDiv.innerHTML;
-                    sessionData.push(logLine);
+                    lastKnownCoords = position.coords;
                 },
                 (error) => {
-                    const errLine = `[${new Date().toLocaleTimeString()}] Error: ${error.message}`;
-                    logDiv.innerHTML = `<div>${errLine}</div>` + logDiv.innerHTML;
+                    console.log("Watch error status:", error.message);
                 },
-                { enableHighAccuracy: true, timeout: 15000 }
+                { 
+                    enableHighAccuracy: false, 
+                    timeout: Infinity,         
+                    maximumAge: 60000          
+                }
             );
+        }
+
+        function recordLocation() {
+            const timeStamp = new Date().toLocaleTimeString();
+            
+            if (lastKnownCoords) {
+                const lat = lastKnownCoords.latitude.toFixed(6);
+                const lon = lastKnownCoords.longitude.toFixed(6);
+                const logLine = `[${timeStamp}] Lat: ${lat}, Lon: ${lon}`;
+                
+                if(sessionData.length === 0) logDiv.innerHTML = "";
+                logDiv.innerHTML = `<div>${logLine}</div>` + logDiv.innerHTML;
+                sessionData.push(logLine);
+            } else {
+                const logLine = `[${timeStamp}] Waiting for GPS satellite fix...`;
+                logDiv.innerHTML = `<div>${logLine}</div>` + logDiv.innerHTML;
+            }
         }
 
         function startTracking() {
@@ -137,6 +152,7 @@
             
             requestWakeLock();
             playBackgroundSilence();
+            initLocationWatch();
             
             recordLocation();
             const minutes = parseInt(intervalSelect.value, 10);
@@ -146,6 +162,10 @@
         function stopTracking() {
             isTracking = false;
             clearInterval(trackingInterval);
+            if (locationWatchId) {
+                navigator.geolocation.clearWatch(locationWatchId);
+                locationWatchId = null;
+            }
             releaseWakeLock();
             stopBackgroundSilence();
             
